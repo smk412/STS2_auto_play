@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sts2-auto-play"
+version = "0.1.0"
+description = "Fair-observation rule agent for Slay the Spire 2"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+sts2-recommend = "sts2_auto_play.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
