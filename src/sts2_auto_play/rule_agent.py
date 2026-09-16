@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from .card_effects import effect_for
+
 
 @dataclass(frozen=True)
 class Recommendation:
@@ -42,15 +44,131 @@ def _incoming_attack(enemies: list[dict[str, Any]]) -> int:
     return total
 
 
+def _enemy_attack(enemy: dict[str, Any]) -> int:
+    """적 하나가 공개한 이번 턴 공격 피해를 계산한다."""
+    return _incoming_attack([enemy])
+
+
 def _energy_cost(card: dict[str, Any]) -> int:
     """카드의 현재 에너지 비용을 정수로 반환한다."""
     return _number(card.get("cost"))
 
 
-def _weakest_enemy(enemies: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """살아 있는 적 중 현재 HP가 가장 낮은 적을 선택한다."""
+def _has_vulnerable(enemy: dict[str, Any]) -> bool:
+    """공개된 상태 목록에서 적에게 취약이 적용됐는지 확인한다."""
+    for status in enemy.get("status") or []:
+        identity = " ".join(
+            str(status.get(key) or "") for key in ("id", "name", "title")
+        ).upper()
+        if "VULNERABLE" in identity or "취약" in identity:
+            amount = status.get("amount", status.get("count", status.get("stacks", 1)))
+            return _number(amount) > 0
+    return False
+
+
+def _card_values(card: dict[str, Any]) -> tuple[int, int, int]:
+    """지원 카드의 현재 피해, 방어도, 취약 수치를 반환한다."""
+    effect = effect_for(card)
+    if effect is None:
+        return 0, 0, 0
+    return effect.values(bool(card.get("is_upgraded")))
+
+
+def _apply_damage(hp: int, block: int, damage: int) -> tuple[int, int]:
+    """피해를 방어도에 먼저 적용한 뒤 남은 HP와 방어도를 반환한다."""
+    absorbed = min(block, damage)
+    return hp - (damage - absorbed), block - absorbed
+
+
+def _lethal_sequence(
+    cards: list[dict[str, Any]],
+    enemy: dict[str, Any],
+    energy: int,
+) -> list[dict[str, Any]] | None:
+    """현재 에너지로 적을 처치할 수 있는 가장 저렴한 공격 순서를 찾는다."""
+    attacks = [card for card in cards if _card_values(card)[0] > 0]
+    best: tuple[tuple[int, int], list[dict[str, Any]]] | None = None
+
+    def search(
+        remaining: list[dict[str, Any]],
+        energy_left: int,
+        hp: int,
+        block: int,
+        vulnerable: bool,
+        sequence: list[dict[str, Any]],
+        spent: int,
+    ) -> None:
+        """남은 공격 카드 순서를 재귀적으로 순회하며 처치 가능한 계획을 갱신한다."""
+        nonlocal best
+        if hp <= 0:
+            score = (spent, len(sequence))
+            if best is None or score < best[0]:
+                best = (score, list(sequence))
+            return
+
+        for position, card in enumerate(remaining):
+            cost = _energy_cost(card)
+            if cost > energy_left:
+                continue
+            damage, _, vulnerable_turns = _card_values(card)
+            actual_damage = int(damage * 1.5) if vulnerable else damage
+            next_hp, next_block = _apply_damage(hp, block, actual_damage)
+            search(
+                remaining[:position] + remaining[position + 1 :],
+                energy_left - cost,
+                next_hp,
+                next_block,
+                vulnerable or vulnerable_turns > 0,
+                sequence + [card],
+                spent + cost,
+            )
+
+    search(
+        attacks,
+        energy,
+        _number(enemy.get("hp")),
+        _number(enemy.get("block")),
+        _has_vulnerable(enemy),
+        [],
+        0,
+    )
+    return best[1] if best else None
+
+
+def _lethal_plan(
+    cards: list[dict[str, Any]],
+    enemies: list[dict[str, Any]],
+    energy: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """여러 적 중 처치 가능한 대상을 골라 공격 순서와 함께 반환한다."""
+    candidates: list[tuple[tuple[int, int, int, int], dict[str, Any], list[dict[str, Any]]]] = []
+    for enemy in enemies:
+        if _number(enemy.get("hp")) <= 0:
+            continue
+        sequence = _lethal_sequence(cards, enemy, energy)
+        if sequence:
+            energy_cost = sum(_energy_cost(card) for card in sequence)
+            score = (
+                energy_cost,
+                len(sequence),
+                -_enemy_attack(enemy),
+                _number(enemy.get("hp")),
+            )
+            candidates.append((score, enemy, sequence))
+    if not candidates:
+        return None
+    _, enemy, sequence = min(candidates, key=lambda item: item[0])
+    return enemy, sequence
+
+
+def _priority_enemy(enemies: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """공격 의도가 큰 적을 우선하고 동률이면 HP가 낮은 적을 선택한다."""
     living = [enemy for enemy in enemies if _number(enemy.get("hp")) > 0]
-    return min(living, key=lambda enemy: _number(enemy.get("hp")), default=None)
+    return min(
+        living,
+        key=lambda enemy: (-_enemy_attack(enemy), _number(enemy.get("hp"))),
+        default=None,
+    )
 
 
 class BasicCombatRuleAgent:
@@ -68,23 +186,58 @@ class BasicCombatRuleAgent:
             return Recommendation("end_turn", reason="사용할 수 있는 카드 또는 에너지가 없습니다.")
 
         playable = [card for card in hand if card.get("can_play")]
+        energy = _number(player.get("energy"))
+        lethal = _lethal_plan(playable, battle["enemies"], energy)
+        if lethal:
+            enemy, sequence = lethal
+            card = sequence[0]
+            return Recommendation(
+                "play_card",
+                card_index=int(card["index"]),
+                target=str(enemy["entity_id"]),
+                reason=f"현재 손패와 에너지로 {enemy.get('name')}을 처치할 수 있어 공격을 우선합니다.",
+            )
+
         incoming = _incoming_attack(battle["enemies"])
         block_gap = max(0, incoming - _number(player.get("block")))
 
-        defends = [card for card in playable if str(card.get("id", "")).startswith("DEFEND")]
+        defends = [card for card in playable if _card_values(card)[1] > 0]
         if block_gap > 0 and defends:
-            card = min(defends, key=_energy_cost)
+            def defense_priority(candidate: dict[str, Any]) -> tuple[int, int, int]:
+                """필요 방어량 충족 여부, 낭비 또는 부족량, 비용 순으로 정렬한다."""
+                block_value = _card_values(candidate)[1]
+                if block_value >= block_gap:
+                    return 0, block_value - block_gap, _energy_cost(candidate)
+                return 1, -block_value, _energy_cost(candidate)
+
+            card = min(
+                defends,
+                key=defense_priority,
+            )
             return Recommendation(
                 "play_card",
                 card_index=int(card["index"]),
                 reason=f"공개된 예상 피해 {incoming}에 비해 방어도가 {player.get('block')}이므로 방어를 우선합니다.",
             )
 
-        enemy = _weakest_enemy(battle["enemies"])
-        attacks = [card for card in playable if card.get("type") == "Attack"]
+        enemy = _priority_enemy(battle["enemies"])
+        attacks = [card for card in playable if _card_values(card)[0] > 0]
         if attacks and enemy:
-            bash = next((card for card in attacks if card.get("id") == "BASH"), None)
-            card = bash or min(attacks, key=_energy_cost)
+            bash = next(
+                (
+                    card
+                    for card in attacks
+                    if card.get("id") == "BASH" and not _has_vulnerable(enemy)
+                ),
+                None,
+            )
+            card = bash or max(
+                attacks,
+                key=lambda candidate: (
+                    _card_values(candidate)[0] / max(1, _energy_cost(candidate)),
+                    _card_values(candidate)[0],
+                ),
+            )
             return Recommendation(
                 "play_card",
                 card_index=int(card["index"]),

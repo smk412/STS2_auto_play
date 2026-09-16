@@ -39,3 +39,14 @@ python -m sts2_auto_play.cli --auto-combat
 - `--auto-combat`에서만 전투 종료까지 반복 실행
 - 자동 전투는 최대 100행동, 상태 안정화, 동일 상태 반복 감지 후 안전 중단
 - 실행 기록은 숨겨진 원본 상태를 제외하고 `logs/combat-*.jsonl`에 저장
+- 아이언클래드의 타격, 수비, 강타 효과를 카드 ID 기반으로 계산
+- 현재 에너지 안에서 즉시 처치 가능한 공격 순서를 방어보다 우선
+- 취약 피해와 다수 적의 처치 가능 여부를 판단에 반영
+
+## 주요 구조
+
+- `client.py`: STS2MCP 상태 조회와 행동 전송
+- `observation.py`: 공개 정보만 남기는 Fair Observation 변환
+- `card_effects.py`: 지원 카드의 피해, 방어도, 상태 효과 수치
+- `rule_agent.py`: 즉시 처치, 방어, 공격 우선순위 판단
+- `combat_runner.py`: 상태 안정화와 전투 종료까지의 반복 실행
