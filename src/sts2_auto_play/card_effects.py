@@ -43,4 +43,3 @@ CARD_EFFECTS: dict[str, CardEffect] = {
 def effect_for(card: dict[str, Any]) -> CardEffect | None:
     """카드 ID로 현재 Rule AI가 지원하는 구조화된 효과를 찾는다."""
     return CARD_EFFECTS.get(str(card.get("id") or ""))
-
