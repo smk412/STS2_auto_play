@@ -173,6 +173,20 @@ class BasicCombatRuleAgentTest(unittest.TestCase):
         self.assertEqual(result.target, "SMALL_0")
         self.assertIn("처치", result.reason)
 
+    def test_lethal_reason_uses_particle_free_target_phrase(self) -> None:
+        """적 이름과 무관하게 자연스러운 처치 판단 문구를 생성하는지 확인한다."""
+        state = observation(block=0, incoming="20", energy=1)
+        state["battle"]["enemies"][0]["name"] = "복슬지렁이"
+        state["battle"]["enemies"][0]["hp"] = 6
+        state["player"]["hand"] = [card("STRIKE_IRONCLAD", 0)]
+
+        result = BasicCombatRuleAgent().recommend(state)
+
+        self.assertEqual(
+            result.reason,
+            "현재 손패와 에너지로 대상 복슬지렁이 처치가 가능해 공격을 우선합니다.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

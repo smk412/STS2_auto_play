@@ -195,7 +195,7 @@ class BasicCombatRuleAgent:
                 "play_card",
                 card_index=int(card["index"]),
                 target=str(enemy["entity_id"]),
-                reason=f"현재 손패와 에너지로 {enemy.get('name')}을 처치할 수 있어 공격을 우선합니다.",
+                reason=f"현재 손패와 에너지로 대상 {enemy.get('name')} 처치가 가능해 공격을 우선합니다.",
             )
 
         incoming = _incoming_attack(battle["enemies"])
